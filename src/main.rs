@@ -14,9 +14,9 @@ mod app {
     use embedded_hal::digital::InputPin;
     use rp2040_hal::{
         clocks::init_clocks_and_plls,
-        fugit::ExtU64,
+        fugit::MillisDurationU64,
         gpio,
-        timer::{monotonic::Monotonic, Alarm0},
+        timer::{monotonic::Monotonic, Alarm0, Instant},
         Sio, Watchdog,
     };
 
@@ -27,10 +27,13 @@ mod app {
     };
 
     const XOSC_CRYSTAL_FREQ: u32 = 12_000_000u32;
+    const DEBOUNCE_DOWN: MillisDurationU64 = MillisDurationU64::millis(5);
+    const DEBOUNCE_UP: MillisDurationU64 = MillisDurationU64::millis(5);
 
     struct KeyState {
         pin: gpio::Pin<gpio::DynPinId, gpio::FunctionSioInput, gpio::PullUp>,
         pressed: bool,
+        last_update: Instant,
         keycode: KeyboardUsage,
     }
 
@@ -125,16 +128,19 @@ mod app {
             KeyState {
                 pin: k1_pin.into_dyn_pin(),
                 pressed: false,
+                last_update: Instant::from_ticks(0),
                 keycode: KeyboardUsage::KeyboardZz,
             },
             KeyState {
                 pin: pins.gpio24.reconfigure().into_dyn_pin(),
                 pressed: false,
+                last_update: Instant::from_ticks(0),
                 keycode: KeyboardUsage::KeyboardXx,
             },
             KeyState {
                 pin: pins.gpio23.reconfigure().into_dyn_pin(),
                 pressed: false,
+                last_update: Instant::from_ticks(0),
                 keycode: KeyboardUsage::KeyboardCc,
             },
         ];
@@ -177,11 +183,19 @@ mod app {
         } = c.local;
 
         loop {
+            let timestamp = monotonics::now();
+
             for (i, key_state) in key_states.into_iter().enumerate() {
-                if key_state.pin.is_low().unwrap() && !key_state.pressed {
+                if key_state.pin.is_low().unwrap()
+                    && !key_state.pressed
+                    && timestamp - key_state.last_update >= DEBOUNCE_DOWN
+                {
                     key_state.pressed = true;
                     key_report.keycodes[i] = key_state.keycode as u8;
-                } else if key_state.pin.is_high().unwrap() && key_state.pressed {
+                } else if key_state.pin.is_high().unwrap()
+                    && key_state.pressed
+                    && timestamp - key_state.last_update >= DEBOUNCE_UP
+                {
                     key_state.pressed = false;
                     key_report.keycodes[i] = 0x00;
                 }
