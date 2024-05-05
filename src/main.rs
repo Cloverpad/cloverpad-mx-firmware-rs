@@ -111,9 +111,19 @@ mod app {
             .unwrap()
             .build();
 
+        // If K1 is low during boot, reset to bootloader instead
+        let mut k1_pin = pins.gpio25.reconfigure();
+        if k1_pin.is_low().unwrap() {
+            rp2040_hal::rom_data::reset_to_usb_boot(0, 0);
+
+            loop {
+                cortex_m::asm::wfi();
+            }
+        }
+
         let key_states = [
             KeyState {
-                pin: pins.gpio25.reconfigure().into_dyn_pin(),
+                pin: k1_pin.into_dyn_pin(),
                 pressed: false,
                 keycode: KeyboardUsage::KeyboardZz,
             },
