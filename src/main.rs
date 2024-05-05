@@ -11,10 +11,9 @@ mod app {
     use defmt_rtt as _;
     use panic_probe as _;
 
-    use embedded_hal::digital::OutputPin;
-    use rp2040_hal as hal;
+    use embedded_hal::digital::{InputPin, OutputPin};
 
-    use hal::{
+    use rp2040_hal::{
         clocks::init_clocks_and_plls,
         fugit::ExtU64,
         gpio,
@@ -33,12 +32,14 @@ mod app {
     #[shared]
     struct Shared {
         led: gpio::Pin<gpio::bank0::Gpio25, gpio::FunctionSioOutput, gpio::PullNone>,
+
         usb_device: UsbDevice<'static, rp2040_hal::usb::UsbBus>,
         hid_keyboard: HIDClass<'static, rp2040_hal::usb::UsbBus>,
     }
 
     #[local]
     struct Local {
+        button: gpio::Pin<gpio::bank0::Gpio18, gpio::FunctionSioInput, gpio::PullUp>,
         key_report: KeyboardReport,
     }
 
@@ -52,7 +53,7 @@ mod app {
         // Soft-reset doesn't release hardware spinlocks
         // Release them here to avoid a deadlock after debug or watchdog reset
         unsafe {
-            hal::sio::spinlock_reset();
+            rp2040_hal::sio::spinlock_reset();
         }
 
         let mut resets = c.device.RESETS;
@@ -69,7 +70,7 @@ mod app {
         .ok()
         .unwrap();
 
-        let mut timer = hal::Timer::new(c.device.TIMER, &mut resets, &clocks);
+        let mut timer = rp2040_hal::Timer::new(c.device.TIMER, &mut resets, &clocks);
         let sio = Sio::new(c.device.SIO);
         let pins = gpio::Pins::new(
             c.device.IO_BANK0,
@@ -82,7 +83,7 @@ mod app {
         // NOTE: The USB bus allocator needs a static lifetime so we can store references in shared struct
         static mut USB_BUS_ALLOCATOR: Option<UsbBusAllocator<rp2040_hal::usb::UsbBus>> = None;
         let usb_bus_allocator = unsafe {
-            USB_BUS_ALLOCATOR = Some(UsbBusAllocator::new(hal::usb::UsbBus::new(
+            USB_BUS_ALLOCATOR = Some(UsbBusAllocator::new(rp2040_hal::usb::UsbBus::new(
                 c.device.USBCTRL_REGS,
                 c.device.USBCTRL_DPRAM,
                 clocks.usb_clock,
@@ -108,8 +109,12 @@ mod app {
         let mut led = pins.gpio25.reconfigure();
         led.set_low().unwrap();
 
+        let button = pins.gpio18.reconfigure();
+        button.set_interrupt_enabled(gpio::Interrupt::EdgeLow, true);
+        button.set_interrupt_enabled(gpio::Interrupt::EdgeHigh, true);
+
         let alarm = timer.alarm_0().unwrap();
-        toggle_key::spawn_after(500.millis()).unwrap();
+        blinky::spawn_after(500.millis()).unwrap();
 
         (
             Shared {
@@ -118,6 +123,7 @@ mod app {
                 hid_keyboard,
             },
             Local {
+                button,
                 key_report: KeyboardReport::default(),
             },
             init::Monotonics(Monotonic::new(timer, alarm)),
@@ -141,31 +147,37 @@ mod app {
         })
     }
 
-    #[task(shared = [led, hid_keyboard], local = [key_report, tog: bool = true])]
-    fn toggle_key(mut c: toggle_key::Context) {
+    #[task(binds = IO_IRQ_BANK0, shared = [hid_keyboard], local = [button, key_report])]
+    fn send_key(mut c: send_key::Context) {
+        let send_key::LocalResources { button, key_report } = c.local;
+
+        if button.interrupt_status(gpio::Interrupt::EdgeHigh) {
+            key_report.keycodes[0] = 0x04;
+            c.shared
+                .hid_keyboard
+                .lock(|hid| hid.push_input(key_report).unwrap_or_default());
+
+            button.clear_interrupt(gpio::Interrupt::EdgeHigh);
+        } else if button.interrupt_status(gpio::Interrupt::EdgeLow) {
+            key_report.keycodes[0] = 0x00;
+            c.shared
+                .hid_keyboard
+                .lock(|hid| hid.push_input(key_report).unwrap_or_default());
+
+            button.clear_interrupt(gpio::Interrupt::EdgeLow);
+        }
+    }
+
+    #[task(shared = [led], local = [tog: bool = true])]
+    fn blinky(mut c: blinky::Context) {
         if *c.local.tog {
             c.shared.led.lock(|l| l.set_high().unwrap());
-            c.local.key_report.keycodes[0] = 0x04;
         } else {
             c.shared.led.lock(|l| l.set_low().unwrap());
-            c.local.key_report.keycodes[0] = 0x00;
         }
-
-        c.shared.hid_keyboard.lock(|h| {
-            push_hid_report(h, c.local.key_report)
-                .ok()
-                .unwrap_or_default()
-        });
 
         *c.local.tog = !*c.local.tog;
 
-        toggle_key::spawn_after(500.millis()).unwrap();
-    }
-
-    fn push_hid_report<U: usb_device::bus::UsbBus, IR: AsInputReport>(
-        hid: &mut HIDClass<U>,
-        report: &IR,
-    ) -> Result<usize, usb_device::UsbError> {
-        hid.push_input(report)
+        blinky::spawn_after(500.millis()).unwrap();
     }
 }
