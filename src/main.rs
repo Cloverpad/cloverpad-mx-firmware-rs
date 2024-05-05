@@ -179,9 +179,9 @@ mod app {
         } = c.local;
 
         loop {
-            let timestamp = monotonics::now();
-
             for (i, key_state) in key_states.into_iter().enumerate() {
+                let timestamp = monotonics::now();
+
                 if key_state.pin.is_low().unwrap()
                     && timestamp - key_state.last_update >= DEBOUNCE_UP
                 {
@@ -191,11 +191,11 @@ mod app {
                 {
                     key_report.keycodes[i] = 0x00;
                 }
-            }
 
-            c.shared
-                .hid_keyboard
-                .lock(|hid| hid.push_input(key_report).unwrap_or_default());
+                c.shared
+                    .hid_keyboard
+                    .lock(|hid| hid.push_input(key_report).unwrap_or_default());
+            }
         }
     }
 }
