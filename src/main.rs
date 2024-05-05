@@ -32,7 +32,6 @@ mod app {
 
     struct KeyState {
         pin: gpio::Pin<gpio::DynPinId, gpio::FunctionSioInput, gpio::PullUp>,
-        pressed: bool,
         last_update: Instant,
         keycode: KeyboardUsage,
     }
@@ -127,19 +126,16 @@ mod app {
         let key_states = [
             KeyState {
                 pin: k1_pin.into_dyn_pin(),
-                pressed: false,
                 last_update: Instant::from_ticks(0),
                 keycode: KeyboardUsage::KeyboardZz,
             },
             KeyState {
                 pin: pins.gpio24.reconfigure().into_dyn_pin(),
-                pressed: false,
                 last_update: Instant::from_ticks(0),
                 keycode: KeyboardUsage::KeyboardXx,
             },
             KeyState {
                 pin: pins.gpio23.reconfigure().into_dyn_pin(),
-                pressed: false,
                 last_update: Instant::from_ticks(0),
                 keycode: KeyboardUsage::KeyboardCc,
             },
@@ -187,16 +183,12 @@ mod app {
 
             for (i, key_state) in key_states.into_iter().enumerate() {
                 if key_state.pin.is_low().unwrap()
-                    && !key_state.pressed
-                    && timestamp - key_state.last_update >= DEBOUNCE_DOWN
-                {
-                    key_state.pressed = true;
-                    key_report.keycodes[i] = key_state.keycode as u8;
-                } else if key_state.pin.is_high().unwrap()
-                    && key_state.pressed
                     && timestamp - key_state.last_update >= DEBOUNCE_UP
                 {
-                    key_state.pressed = false;
+                    key_report.keycodes[i] = key_state.keycode as u8;
+                } else if key_state.pin.is_high().unwrap()
+                    && timestamp - key_state.last_update >= DEBOUNCE_DOWN
+                {
                     key_report.keycodes[i] = 0x00;
                 }
             }
