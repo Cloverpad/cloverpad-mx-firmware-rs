@@ -17,7 +17,7 @@ use hal::{
 
 use usb_device::{class_prelude::*, prelude::*};
 use usbd_hid::{
-    descriptor::{generator_prelude::*, MouseReport},
+    descriptor::{generator_prelude::*, KeyboardReport},
     hid_class::HIDClass,
 };
 
@@ -40,7 +40,6 @@ static mut USB_HID: Option<HIDClass<hal::usb::UsbBus>> = None;
 fn main() -> ! {
     info!("Program start");
     let mut pac = pac::Peripherals::take().unwrap();
-    let core = pac::CorePeripherals::take().unwrap();
     let mut watchdog = Watchdog::new(pac.WATCHDOG);
     let sio = Sio::new(pac.SIO);
 
@@ -63,8 +62,6 @@ fn main() -> ! {
     .ok()
     .unwrap();
 
-    let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
-
     // Setup the USB driver
     let usb_bus = UsbBusAllocator::new(hal::usb::UsbBus::new(
         pac.USBCTRL_REGS,
@@ -84,7 +81,8 @@ fn main() -> ! {
     let bus_ref = unsafe { USB_BUS.as_ref().unwrap() };
 
     // Setup the USB HID Class Device driver, providing mouse reports
-    let usb_hid = HIDClass::new(bus_ref, MouseReport::desc(), 1);
+    // let usb_hid = HIDClass::new(bus_ref, NkroReport::desc(), 1);
+    let usb_hid = HIDClass::new(bus_ref, KeyboardReport::desc(), 1);
     unsafe {
         // NOTE: Safe as interrupts haven't started yet
         USB_HID = Some(usb_hid);
@@ -108,32 +106,32 @@ fn main() -> ! {
         pac::NVIC::unmask(hal::pac::Interrupt::USBCTRL_IRQ);
     }
 
+    let core = pac::CorePeripherals::take().unwrap();
+    let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
     let mut led_pin = pins.gpio25.into_push_pull_output();
-    info!("Enabling LED");
-    led_pin.set_high().unwrap();
 
-    const MOUSE_UP: MouseReport = MouseReport {
-        x: 0,
-        y: 4,
-        buttons: 0,
-        wheel: 0,
-        pan: 0,
+    const PRESSED: KeyboardReport = KeyboardReport {
+        modifier: 0,
+        reserved: 0,
+        leds: 0,
+        keycodes: [0x04, 0, 0, 0, 0, 0],
     };
 
-    const MOUSE_DOWN: MouseReport = MouseReport {
-        x: 0,
-        y: -4,
-        buttons: 0,
-        wheel: 0,
-        pan: 0,
+    const RELEASED: KeyboardReport = KeyboardReport {
+        modifier: 0,
+        reserved: 0,
+        leds: 0,
+        keycodes: [0; 6],
     };
 
     loop {
-        delay.delay_ms(100);
-        push_hid_report(&MOUSE_UP).ok().unwrap_or(0);
+        led_pin.set_high().unwrap();
+        push_hid_report(&PRESSED).ok().unwrap_or(0);
+        delay.delay_ms(1000);
 
-        delay.delay_ms(100);
-        push_hid_report(&MOUSE_DOWN).ok().unwrap_or(0);
+        led_pin.set_low().unwrap();
+        push_hid_report(&RELEASED).ok().unwrap_or(0);
+        delay.delay_ms(1000);
     }
 }
 
@@ -152,5 +150,11 @@ unsafe fn USBCTRL_IRQ() {
     // Handle USB request
     let usb_dev = USB_DEVICE.as_mut().unwrap();
     let usb_hid = USB_HID.as_mut().unwrap();
-    usb_dev.poll(&mut [usb_hid]);
+
+    if usb_dev.poll(&mut [usb_hid]) {
+        // The OS may send a report to the keypad, e.g. setting NumLock LED
+        // We don't need to process this, so read + discard any output
+        let mut buf = [0; 64];
+        let _ = usb_hid.pull_raw_output(&mut buf);
+    }
 }
