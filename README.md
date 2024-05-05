@@ -13,7 +13,7 @@ It should appear as a storage device:
 
 ![PCB Storage Device](./docs/pcb-storage-device.jpg)
 
-Download the latest version of `cloverpad-mx-firmware-rs.uf2` from [GitHub Releases](https://github.com/Cloverpad/cloverpad-mx-firmware-rs/releases), and copy it into the `RPI-RP2` storage device.
+Download the latest version of `cloverpad-mx-firmware-rs.uf2` from [GitHub Releases](https://github.com/Cloverpad/cloverpad-mx-firmware-rs/releases/latest), and copy it into the `RPI-RP2` storage device.
 
 ## Setting Up Development Environment
 
