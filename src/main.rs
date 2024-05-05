@@ -5,7 +5,7 @@
 #[used]
 pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_W25Q080;
 
-#[rtic::app(device = rp2040_hal::pac, peripherals = true, dispatchers = [I2C0_IRQ])]
+#[rtic::app(device = rp2040_hal::pac, peripherals = true)]
 mod app {
     use defmt::*;
     use defmt_rtt as _;
