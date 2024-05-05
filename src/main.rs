@@ -23,7 +23,7 @@ mod app {
 
     use usb_device::{class_prelude::*, prelude::*};
     use usbd_hid::{
-        descriptor::{generator_prelude::*, AsInputReport, KeyboardReport},
+        descriptor::{generator_prelude::*, KeyboardReport},
         hid_class::HIDClass,
     };
 
@@ -110,8 +110,6 @@ mod app {
         led.set_low().unwrap();
 
         let button = pins.gpio18.reconfigure();
-        button.set_interrupt_enabled(gpio::Interrupt::EdgeLow, true);
-        button.set_interrupt_enabled(gpio::Interrupt::EdgeHigh, true);
 
         let alarm = timer.alarm_0().unwrap();
         blinky::spawn_after(500.millis()).unwrap();
@@ -147,24 +145,30 @@ mod app {
         })
     }
 
-    #[task(binds = IO_IRQ_BANK0, shared = [hid_keyboard], local = [button, key_report])]
-    fn send_key(mut c: send_key::Context) {
-        let send_key::LocalResources { button, key_report } = c.local;
+    #[idle(shared = [hid_keyboard], local = [button, key_report, pressed: bool = false])]
+    fn idle(mut c: idle::Context) -> ! {
+        let idle::LocalResources {
+            button,
+            key_report,
+            pressed,
+        } = c.local;
 
-        if button.interrupt_status(gpio::Interrupt::EdgeHigh) {
-            key_report.keycodes[0] = 0x04;
-            c.shared
-                .hid_keyboard
-                .lock(|hid| hid.push_input(key_report).unwrap_or_default());
+        loop {
+            if button.is_high().unwrap() && !*pressed {
+                *pressed = true;
+                key_report.keycodes[0] = 0x04;
 
-            button.clear_interrupt(gpio::Interrupt::EdgeHigh);
-        } else if button.interrupt_status(gpio::Interrupt::EdgeLow) {
-            key_report.keycodes[0] = 0x00;
-            c.shared
-                .hid_keyboard
-                .lock(|hid| hid.push_input(key_report).unwrap_or_default());
+                c.shared
+                    .hid_keyboard
+                    .lock(|hid| hid.push_input(key_report).unwrap_or_default());
+            } else if button.is_low().unwrap() && *pressed {
+                *pressed = false;
+                key_report.keycodes[0] = 0x00;
 
-            button.clear_interrupt(gpio::Interrupt::EdgeLow);
+                c.shared
+                    .hid_keyboard
+                    .lock(|hid| hid.push_input(key_report).unwrap_or_default());
+            }
         }
     }
 
