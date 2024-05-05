@@ -11,8 +11,7 @@ mod app {
     use defmt_rtt as _;
     use panic_probe as _;
 
-    use embedded_hal::digital::{InputPin, OutputPin};
-
+    use embedded_hal::digital::InputPin;
     use rp2040_hal::{
         clocks::init_clocks_and_plls,
         fugit::ExtU64,
@@ -23,24 +22,28 @@ mod app {
 
     use usb_device::{class_prelude::*, prelude::*};
     use usbd_hid::{
-        descriptor::{generator_prelude::*, KeyboardReport},
+        descriptor::{generator_prelude::*, KeyboardReport, KeyboardUsage},
         hid_class::HIDClass,
     };
 
     const XOSC_CRYSTAL_FREQ: u32 = 12_000_000u32;
 
+    struct KeyState {
+        pin: gpio::Pin<gpio::DynPinId, gpio::FunctionSioInput, gpio::PullUp>,
+        pressed: bool,
+        keycode: KeyboardUsage,
+    }
+
     #[shared]
     struct Shared {
-        led: gpio::Pin<gpio::bank0::Gpio25, gpio::FunctionSioOutput, gpio::PullNone>,
-
         usb_device: UsbDevice<'static, rp2040_hal::usb::UsbBus>,
         hid_keyboard: HIDClass<'static, rp2040_hal::usb::UsbBus>,
     }
 
     #[local]
     struct Local {
-        button: gpio::Pin<gpio::bank0::Gpio18, gpio::FunctionSioInput, gpio::PullUp>,
         key_report: KeyboardReport,
+        key_states: [KeyState; 3],
     }
 
     #[monotonic(binds = TIMER_IRQ_0, default = true)]
@@ -71,6 +74,8 @@ mod app {
         .unwrap();
 
         let mut timer = rp2040_hal::Timer::new(c.device.TIMER, &mut resets, &clocks);
+        let alarm = timer.alarm_0().unwrap();
+
         let sio = Sio::new(c.device.SIO);
         let pins = gpio::Pins::new(
             c.device.IO_BANK0,
@@ -106,23 +111,32 @@ mod app {
             .unwrap()
             .build();
 
-        let mut led = pins.gpio25.reconfigure();
-        led.set_low().unwrap();
-
-        let button = pins.gpio18.reconfigure();
-
-        let alarm = timer.alarm_0().unwrap();
-        blinky::spawn_after(500.millis()).unwrap();
+        let key_states = [
+            KeyState {
+                pin: pins.gpio25.reconfigure().into_dyn_pin(),
+                pressed: false,
+                keycode: KeyboardUsage::KeyboardZz,
+            },
+            KeyState {
+                pin: pins.gpio24.reconfigure().into_dyn_pin(),
+                pressed: false,
+                keycode: KeyboardUsage::KeyboardXx,
+            },
+            KeyState {
+                pin: pins.gpio23.reconfigure().into_dyn_pin(),
+                pressed: false,
+                keycode: KeyboardUsage::KeyboardCc,
+            },
+        ];
 
         (
             Shared {
-                led,
                 usb_device,
                 hid_keyboard,
             },
             Local {
-                button,
                 key_report: KeyboardReport::default(),
+                key_states,
             },
             init::Monotonics(Monotonic::new(timer, alarm)),
         )
@@ -145,43 +159,27 @@ mod app {
         })
     }
 
-    #[idle(shared = [hid_keyboard], local = [button, key_report, pressed: bool = false])]
+    #[idle(shared = [hid_keyboard], local = [key_report, key_states])]
     fn idle(mut c: idle::Context) -> ! {
         let idle::LocalResources {
-            button,
             key_report,
-            pressed,
+            key_states,
         } = c.local;
 
         loop {
-            if button.is_high().unwrap() && !*pressed {
-                *pressed = true;
-                key_report.keycodes[0] = 0x04;
-
-                c.shared
-                    .hid_keyboard
-                    .lock(|hid| hid.push_input(key_report).unwrap_or_default());
-            } else if button.is_low().unwrap() && *pressed {
-                *pressed = false;
-                key_report.keycodes[0] = 0x00;
-
-                c.shared
-                    .hid_keyboard
-                    .lock(|hid| hid.push_input(key_report).unwrap_or_default());
+            for (i, key_state) in key_states.into_iter().enumerate() {
+                if key_state.pin.is_low().unwrap() && !key_state.pressed {
+                    key_state.pressed = true;
+                    key_report.keycodes[i] = key_state.keycode as u8;
+                } else if key_state.pin.is_high().unwrap() && key_state.pressed {
+                    key_state.pressed = false;
+                    key_report.keycodes[i] = 0x00;
+                }
             }
+
+            c.shared
+                .hid_keyboard
+                .lock(|hid| hid.push_input(key_report).unwrap_or_default());
         }
-    }
-
-    #[task(shared = [led], local = [tog: bool = true])]
-    fn blinky(mut c: blinky::Context) {
-        if *c.local.tog {
-            c.shared.led.lock(|l| l.set_high().unwrap());
-        } else {
-            c.shared.led.lock(|l| l.set_low().unwrap());
-        }
-
-        *c.local.tog = !*c.local.tog;
-
-        blinky::spawn_after(500.millis()).unwrap();
     }
 }
