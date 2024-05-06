@@ -191,10 +191,12 @@ mod app {
                     && timestamp - key_state.last_update >= DEBOUNCE_UP
                 {
                     key_report.keycodes[i] = key_state.keycode as u8;
+                    key_state.last_update = timestamp;
                 } else if key_state.pin.is_high().unwrap()
                     && timestamp - key_state.last_update >= DEBOUNCE_DOWN
                 {
                     key_report.keycodes[i] = 0x00;
+                    key_state.last_update = timestamp;
                 }
 
                 c.shared
