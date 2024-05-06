@@ -38,13 +38,13 @@ mod app {
 
     #[shared]
     struct Shared {
-        usb_device: UsbDevice<'static, rp2040_hal::usb::UsbBus>,
         hid_keyboard: HIDClass<'static, rp2040_hal::usb::UsbBus>,
     }
 
     #[local]
     struct Local {
         // USB IRQ
+        usb_device: UsbDevice<'static, rp2040_hal::usb::UsbBus>,
         hid_discard_buf: [u8; 64],
 
         // "Idle" Loop
@@ -146,12 +146,10 @@ mod app {
         ];
 
         (
-            Shared {
-                usb_device,
-                hid_keyboard,
-            },
+            Shared { hid_keyboard },
             Local {
                 // USB IRQ
+                usb_device,
                 hid_discard_buf: [0; 64],
 
                 // "Idle" Loop
@@ -162,18 +160,18 @@ mod app {
         )
     }
 
-    #[task(binds = USBCTRL_IRQ, shared = [usb_device, hid_keyboard], local = [hid_discard_buf])]
-    fn poll_usb(c: poll_usb::Context) {
-        let poll_usb::SharedResources {
+    #[task(binds = USBCTRL_IRQ, shared = [hid_keyboard], local = [usb_device, hid_discard_buf])]
+    fn poll_usb(mut c: poll_usb::Context) {
+        let poll_usb::LocalResources {
             usb_device,
-            hid_keyboard,
-        } = c.shared;
+            hid_discard_buf,
+        } = c.local;
 
-        (usb_device, hid_keyboard).lock(|dev, hid| {
-            if dev.poll(&mut [hid]) {
+        c.shared.hid_keyboard.lock(|hid| {
+            if usb_device.poll(&mut [hid]) {
                 // The OS may send a report to the keypad, e.g. setting NumLock LED
                 // We don't need to process this, so read + discard it
-                let _ = hid.pull_raw_output(c.local.hid_discard_buf);
+                let _ = hid.pull_raw_output(hid_discard_buf);
             }
         })
     }
