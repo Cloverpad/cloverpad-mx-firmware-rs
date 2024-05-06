@@ -44,6 +44,10 @@ mod app {
 
     #[local]
     struct Local {
+        // USB IRQ
+        hid_discard_buf: [u8; 64],
+
+        // "Idle" Loop
         key_report: KeyboardReport,
         key_states: [KeyState; 3],
     }
@@ -147,6 +151,10 @@ mod app {
                 hid_keyboard,
             },
             Local {
+                // USB IRQ
+                hid_discard_buf: [0; 64],
+
+                // "Idle" Loop
                 key_report: KeyboardReport::default(),
                 key_states,
             },
@@ -154,7 +162,7 @@ mod app {
         )
     }
 
-    #[task(binds = USBCTRL_IRQ, shared = [usb_device, hid_keyboard])]
+    #[task(binds = USBCTRL_IRQ, shared = [usb_device, hid_keyboard], local = [hid_discard_buf])]
     fn poll_usb(c: poll_usb::Context) {
         let poll_usb::SharedResources {
             usb_device,
@@ -165,8 +173,7 @@ mod app {
             if dev.poll(&mut [hid]) {
                 // The OS may send a report to the keypad, e.g. setting NumLock LED
                 // We don't need to process this, so read + discard it
-                let mut throwaway = [0; 64];
-                let _ = hid.pull_raw_output(&mut throwaway);
+                let _ = hid.pull_raw_output(c.local.hid_discard_buf);
             }
         })
     }
