@@ -55,7 +55,7 @@ mod app {
     #[monotonic(binds = TIMER_IRQ_0, default = true)]
     type MyMono = Monotonic<Alarm0>;
 
-    #[init]
+    #[init(local = [usb_bus: Option<UsbBusAllocator<rp2040_hal::usb::UsbBus>> = None])]
     fn init(c: init::Context) -> (Shared, Local, init::Monotonics) {
         info!("Initialising app");
 
@@ -90,26 +90,22 @@ mod app {
             &mut resets,
         );
 
-        // Setup the USB driver
-        // NOTE: The USB bus allocator needs a static lifetime so we can store references in shared struct
-        static mut USB_BUS_ALLOCATOR: Option<UsbBusAllocator<rp2040_hal::usb::UsbBus>> = None;
-        let usb_bus_allocator = unsafe {
-            USB_BUS_ALLOCATOR = Some(UsbBusAllocator::new(rp2040_hal::usb::UsbBus::new(
-                c.device.USBCTRL_REGS,
-                c.device.USBCTRL_DPRAM,
-                clocks.usb_clock,
-                true,
-                &mut resets,
-            )));
+        // Setup the USB driver with static lifetime
+        *c.local.usb_bus = Some(UsbBusAllocator::new(rp2040_hal::usb::UsbBus::new(
+            c.device.USBCTRL_REGS,
+            c.device.USBCTRL_DPRAM,
+            clocks.usb_clock,
+            true,
+            &mut resets,
+        )));
 
-            USB_BUS_ALLOCATOR.as_ref().unwrap()
-        };
+        let usb_bus_allocator = c.local.usb_bus.as_ref().unwrap();
 
         // Setup the HID class driver, providing keyboard reports
-        let hid_keyboard = HIDClass::new(&usb_bus_allocator, KeyboardReport::desc(), 1);
+        let hid_keyboard = HIDClass::new(usb_bus_allocator, KeyboardReport::desc(), 1);
 
         // Setup the USB device description
-        let usb_device = UsbDeviceBuilder::new(&usb_bus_allocator, UsbVidPid(0x1404, 0x1404))
+        let usb_device = UsbDeviceBuilder::new(usb_bus_allocator, UsbVidPid(0x1404, 0x1404))
             .strings(&[StringDescriptors::default()
                 .manufacturer("Cloverpad")
                 .product("Cloverpad MX")
