@@ -115,6 +115,8 @@ mod app {
 
         // If K1 is low during boot, reset to bootloader instead
         let mut k1_pin = pins.gpio25.reconfigure();
+        k1_pin.set_schmitt_enabled(true);
+
         if k1_pin.is_low().unwrap() {
             rp2040_hal::rom_data::reset_to_usb_boot(0, 0);
 
@@ -123,6 +125,12 @@ mod app {
             }
         }
 
+        let k2_pin = pins.gpio24.reconfigure();
+        k2_pin.set_schmitt_enabled(true);
+
+        let k3_pin = pins.gpio23.reconfigure();
+        k3_pin.set_schmitt_enabled(true);
+
         let key_states = [
             KeyState {
                 pin: k1_pin.into_dyn_pin(),
@@ -130,12 +138,12 @@ mod app {
                 keycode: KeyboardUsage::KeyboardZz,
             },
             KeyState {
-                pin: pins.gpio24.reconfigure().into_dyn_pin(),
+                pin: k2_pin.into_dyn_pin(),
                 last_update: Instant::from_ticks(0),
                 keycode: KeyboardUsage::KeyboardXx,
             },
             KeyState {
-                pin: pins.gpio23.reconfigure().into_dyn_pin(),
+                pin: k3_pin.into_dyn_pin(),
                 last_update: Instant::from_ticks(0),
                 keycode: KeyboardUsage::KeyboardCc,
             },
