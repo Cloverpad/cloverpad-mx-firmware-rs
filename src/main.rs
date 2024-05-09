@@ -31,7 +31,7 @@ mod app {
     const DEBOUNCE_UP: MillisDurationU64 = MillisDurationU64::millis(5);
 
     struct KeyState {
-        pin: gpio::Pin<gpio::DynPinId, gpio::FunctionSioInput, gpio::PullUp>,
+        read_mask: u32,
         last_update: Instant,
         keycode: KeyboardUsage,
     }
@@ -114,8 +114,13 @@ mod app {
             .build();
 
         // If K1 is low during boot, reset to bootloader instead
-        let mut k1_pin = pins.gpio25.reconfigure();
+        let mut k1_pin = pins.gpio25.into_pull_up_input();
+        let k2_pin = pins.gpio24.into_pull_up_input();
+        let k3_pin = pins.gpio23.into_pull_up_input();
+
         k1_pin.set_schmitt_enabled(true);
+        k2_pin.set_schmitt_enabled(true);
+        k3_pin.set_schmitt_enabled(true);
 
         if k1_pin.is_low().unwrap() {
             rp2040_hal::rom_data::reset_to_usb_boot(0, 0);
@@ -125,25 +130,19 @@ mod app {
             }
         }
 
-        let k2_pin = pins.gpio24.reconfigure();
-        k2_pin.set_schmitt_enabled(true);
-
-        let k3_pin = pins.gpio23.reconfigure();
-        k3_pin.set_schmitt_enabled(true);
-
         let key_states = [
             KeyState {
-                pin: k1_pin.into_dyn_pin(),
+                read_mask: 1 << k1_pin.id().num,
                 last_update: Instant::from_ticks(0),
                 keycode: KeyboardUsage::KeyboardZz,
             },
             KeyState {
-                pin: k2_pin.into_dyn_pin(),
+                read_mask: 1 << k2_pin.id().num,
                 last_update: Instant::from_ticks(0),
                 keycode: KeyboardUsage::KeyboardXx,
             },
             KeyState {
-                pin: k3_pin.into_dyn_pin(),
+                read_mask: 1 << k3_pin.id().num,
                 last_update: Instant::from_ticks(0),
                 keycode: KeyboardUsage::KeyboardCc,
             },
@@ -188,17 +187,16 @@ mod app {
         } = c.local;
 
         loop {
-            for (i, key_state) in key_states.into_iter().enumerate() {
-                let timestamp = monotonics::now();
+            let timestamp = monotonics::now();
+            let pin_states = rp2040_hal::Sio::read_bank0();
 
-                if key_state.pin.is_low().unwrap()
-                    && timestamp - key_state.last_update >= DEBOUNCE_UP
-                {
+            for (i, key_state) in key_states.into_iter().enumerate() {
+                let pressed = (pin_states & key_state.read_mask) == 0;
+
+                if pressed && timestamp - key_state.last_update >= DEBOUNCE_UP {
                     key_report.keycodes[i] = key_state.keycode as u8;
                     key_state.last_update = timestamp;
-                } else if key_state.pin.is_high().unwrap()
-                    && timestamp - key_state.last_update >= DEBOUNCE_DOWN
-                {
+                } else if !pressed && timestamp - key_state.last_update >= DEBOUNCE_DOWN {
                     key_report.keycodes[i] = 0x00;
                     key_state.last_update = timestamp;
                 }
