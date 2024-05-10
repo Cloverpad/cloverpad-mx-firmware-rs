@@ -30,6 +30,8 @@ Add the `thumbv6m-none-eabi` compilation target via Rustup:
 rustup target add thumbv6m-none-eabi
 ```
 
+If you're using Linux, you'll also need to setup `udev` rules. Download a copy of [`udev/99-cloverpad.rules`](./ude`v/99-cloverpad.rules) and move it into `/etc/udev/rules.d`.
+
 ### Loading Firmware Over USB
 
 To load firmware over USB, make sure that the default runner in [`.cargo/config.toml`](./.cargo/config.toml) is set to:
