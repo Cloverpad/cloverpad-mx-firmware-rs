@@ -1,30 +1,31 @@
 #![no_std]
 #![no_main]
 
+use defmt_rtt as _;
+use panic_probe as _;
+
+use rtic_monotonics::{rp2040_timer_monotonic, Monotonic};
+
+use embedded_hal::digital::InputPin;
+use rp2040_hal::{
+    clocks::init_clocks_and_plls, fugit::MillisDurationU64, gpio, timer::Instant, Sio, Watchdog,
+};
+
+use usb_device::{class_prelude::*, prelude::*};
+use usbd_hid::{
+    descriptor::{generator_prelude::*, KeyboardReport, KeyboardUsage},
+    hid_class::HIDClass,
+};
+
 #[link_section = ".boot2"]
 #[used]
 pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_W25Q080;
 
+rp2040_timer_monotonic!(Mono);
+
 #[rtic::app(device = rp2040_hal::pac, peripherals = true)]
 mod app {
-    use defmt::*;
-    use defmt_rtt as _;
-    use panic_probe as _;
-
-    use embedded_hal::digital::InputPin;
-    use rp2040_hal::{
-        clocks::init_clocks_and_plls,
-        fugit::MillisDurationU64,
-        gpio,
-        timer::{monotonic::Monotonic, Alarm0, Instant},
-        Sio, Watchdog,
-    };
-
-    use usb_device::{class_prelude::*, prelude::*};
-    use usbd_hid::{
-        descriptor::{generator_prelude::*, KeyboardReport, KeyboardUsage},
-        hid_class::HIDClass,
-    };
+    use super::*;
 
     const XOSC_CRYSTAL_FREQ: u32 = 12_000_000u32;
     const DEBOUNCE_DOWN: MillisDurationU64 = MillisDurationU64::millis(5);
@@ -52,12 +53,9 @@ mod app {
         key_states: [KeyState; 3],
     }
 
-    #[monotonic(binds = TIMER_IRQ_0, default = true)]
-    type MyMono = Monotonic<Alarm0>;
-
     #[init(local = [usb_bus: Option<UsbBusAllocator<rp2040_hal::usb::UsbBus>> = None])]
-    fn init(c: init::Context) -> (Shared, Local, init::Monotonics) {
-        info!("Initialising app");
+    fn init(c: init::Context) -> (Shared, Local) {
+        defmt::info!("Initialising app");
 
         // Soft-reset doesn't release hardware spinlocks
         // Release them here to avoid a deadlock after debug or watchdog reset
@@ -79,8 +77,7 @@ mod app {
         .ok()
         .unwrap();
 
-        let mut timer = rp2040_hal::Timer::new(c.device.TIMER, &mut resets, &clocks);
-        let alarm = timer.alarm_0().unwrap();
+        Mono::start(c.device.TIMER, &mut resets);
 
         let sio = Sio::new(c.device.SIO);
         let pins = gpio::Pins::new(
@@ -159,7 +156,6 @@ mod app {
                 key_report: KeyboardReport::default(),
                 key_states,
             },
-            init::Monotonics(Monotonic::new(timer, alarm)),
         )
     }
 
@@ -168,6 +164,7 @@ mod app {
         let poll_usb::LocalResources {
             usb_device,
             hid_discard_buf,
+            ..
         } = c.local;
 
         c.shared.hid_keyboard.lock(|hid| {
@@ -184,10 +181,11 @@ mod app {
         let idle::LocalResources {
             key_report,
             key_states,
+            ..
         } = c.local;
 
         loop {
-            let timestamp = monotonics::now();
+            let timestamp = Mono::now();
             let pin_states = rp2040_hal::Sio::read_bank0();
 
             for (i, key_state) in key_states.into_iter().enumerate() {
