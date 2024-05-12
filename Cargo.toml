@@ -2,7 +2,7 @@
 edition = "2021"
 name = "cloverpad-mx-firmware-rs"
 description = "Firmware for the Cloverpad MX, a 3-key mechanical keypad for osu!"
-version = "1.0.0"
+version = "1.0.1"
 license = "GPL-3.0"
 publish = false
 
