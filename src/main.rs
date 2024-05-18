@@ -39,17 +39,17 @@ mod app {
 
     #[shared]
     struct Shared {
-        hid_keyboard: HIDClass<'static, rp2040_hal::usb::UsbBus>,
+        key_report: KeyboardReport,
     }
 
     #[local]
     struct Local {
         // USB IRQ
         usb_device: UsbDevice<'static, rp2040_hal::usb::UsbBus>,
+        hid_keyboard: HIDClass<'static, rp2040_hal::usb::UsbBus>,
         hid_discard_buf: [u8; 64],
 
         // "Idle" Loop
-        key_report: KeyboardReport,
         key_states: [KeyState; 3],
     }
 
@@ -146,43 +146,45 @@ mod app {
         ];
 
         (
-            Shared { hid_keyboard },
+            Shared {
+                key_report: KeyboardReport::default(),
+            },
             Local {
                 // USB IRQ
                 usb_device,
+                hid_keyboard,
                 hid_discard_buf: [0; 64],
 
                 // "Idle" Loop
-                key_report: KeyboardReport::default(),
                 key_states,
             },
         )
     }
 
-    #[task(binds = USBCTRL_IRQ, shared = [hid_keyboard], local = [usb_device, hid_discard_buf])]
+    #[task(binds = USBCTRL_IRQ, shared = [key_report], local = [usb_device, hid_keyboard, hid_discard_buf])]
     fn poll_usb(mut c: poll_usb::Context) {
         let poll_usb::LocalResources {
             usb_device,
+            hid_keyboard,
             hid_discard_buf,
             ..
         } = c.local;
 
-        c.shared.hid_keyboard.lock(|hid| {
-            if usb_device.poll(&mut [hid]) {
-                // The OS may send a report to the keypad, e.g. setting NumLock LED
-                // We don't need to process this, so read + discard it
-                let _ = hid.pull_raw_output(hid_discard_buf);
-            }
-        })
+        c.shared.key_report.lock(|kr| {
+            let _ = hid_keyboard.push_input(kr);
+        });
+
+        if usb_device.poll(&mut [hid_keyboard]) {
+            // The OS may send a report to the keypad, e.g. setting NumLock LED
+            // We don't need to process this, so read + discard it
+            let _ = hid_keyboard.pull_raw_output(hid_discard_buf);
+        }
     }
 
-    #[idle(shared = [hid_keyboard], local = [key_report, key_states])]
-    fn idle(mut c: idle::Context) -> ! {
-        let idle::LocalResources {
-            key_report,
-            key_states,
-            ..
-        } = c.local;
+    #[idle(shared = [key_report], local = [key_states])]
+    fn idle(c: idle::Context) -> ! {
+        let mut key_report = c.shared.key_report;
+        let key_states = c.local.key_states;
 
         loop {
             let timestamp = Mono::now();
@@ -192,16 +194,12 @@ mod app {
                 let pressed = (pin_states & key_state.read_mask) == 0;
 
                 if pressed && timestamp - key_state.last_update >= DEBOUNCE_UP {
-                    key_report.keycodes[i] = key_state.keycode as u8;
+                    key_report.lock(|kr| kr.keycodes[i] = key_state.keycode as u8);
                     key_state.last_update = timestamp;
                 } else if !pressed && timestamp - key_state.last_update >= DEBOUNCE_DOWN {
-                    key_report.keycodes[i] = 0x00;
+                    key_report.lock(|kr| kr.keycodes[i] = 0x00);
                     key_state.last_update = timestamp;
                 }
-
-                c.shared
-                    .hid_keyboard
-                    .lock(|hid| hid.push_input(key_report).unwrap_or_default());
             }
         }
     }
