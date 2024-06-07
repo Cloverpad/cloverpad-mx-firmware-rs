@@ -8,7 +8,7 @@ use rtic_monotonics::{rp2040_timer_monotonic, Monotonic};
 
 use embedded_hal::digital::InputPin;
 use rp2040_hal::{
-    clocks::init_clocks_and_plls, fugit::MillisDurationU64, gpio, timer::Instant, Sio, Watchdog,
+    clocks::init_clocks_and_plls, fugit::TimerDurationU64, gpio, timer::Instant, Sio, Watchdog,
 };
 
 use usb_device::{class_prelude::*, prelude::*};
@@ -28,28 +28,28 @@ mod app {
     use super::*;
 
     const XOSC_CRYSTAL_FREQ: u32 = 12_000_000u32;
-    const DEBOUNCE_DOWN: MillisDurationU64 = MillisDurationU64::millis(5);
-    const DEBOUNCE_UP: MillisDurationU64 = MillisDurationU64::millis(5);
+    const DEBOUNCE_DOWN: TimerDurationU64<1_000_000> = TimerDurationU64::<1_000_000>::millis(5);
+    const DEBOUNCE_UP: TimerDurationU64<1_000_000> = TimerDurationU64::<1_000_000>::millis(5);
 
     struct KeyState {
         read_mask: u32,
-        last_update: Instant,
+        next_update: Instant,
         keycode: KeyboardUsage,
     }
 
     #[shared]
     struct Shared {
-        key_report: KeyboardReport,
+        hid_keyboard: HIDClass<'static, rp2040_hal::usb::UsbBus>,
     }
 
     #[local]
     struct Local {
         // USB IRQ
         usb_device: UsbDevice<'static, rp2040_hal::usb::UsbBus>,
-        hid_keyboard: HIDClass<'static, rp2040_hal::usb::UsbBus>,
 
         // "Idle" Loop
         key_states: [KeyState; 3],
+        key_report: KeyboardReport,
     }
 
     #[init(local = [usb_bus: Option<UsbBusAllocator<rp2040_hal::usb::UsbBus>> = None])]
@@ -129,71 +129,79 @@ mod app {
         let key_states = [
             KeyState {
                 read_mask: 1 << k1_pin.id().num,
-                last_update: Instant::from_ticks(0),
+                next_update: Instant::from_ticks(0),
                 keycode: KeyboardUsage::KeyboardZz,
             },
             KeyState {
                 read_mask: 1 << k2_pin.id().num,
-                last_update: Instant::from_ticks(0),
+                next_update: Instant::from_ticks(0),
                 keycode: KeyboardUsage::KeyboardXx,
             },
             KeyState {
                 read_mask: 1 << k3_pin.id().num,
-                last_update: Instant::from_ticks(0),
+                next_update: Instant::from_ticks(0),
                 keycode: KeyboardUsage::KeyboardCc,
             },
         ];
 
         (
-            Shared {
-                key_report: KeyboardReport::default(),
-            },
+            Shared { hid_keyboard },
             Local {
                 // USB IRQ
                 usb_device,
-                hid_keyboard,
 
                 // "Idle" Loop
                 key_states,
+                key_report: KeyboardReport::default(),
             },
         )
     }
 
-    #[task(binds = USBCTRL_IRQ, shared = [key_report], local = [usb_device, hid_keyboard])]
+    #[task(binds = USBCTRL_IRQ, shared = [hid_keyboard], local = [usb_device])]
     fn poll_usb(mut c: poll_usb::Context) {
-        let poll_usb::LocalResources {
-            usb_device,
-            hid_keyboard,
-            ..
-        } = c.local;
-
-        if usb_device.poll(&mut [hid_keyboard]) {
-            c.shared.key_report.lock(|kr| {
-                let _ = hid_keyboard.push_input(kr);
-            });
-        }
+        c.shared
+            .hid_keyboard
+            .lock(|hid| c.local.usb_device.poll(&mut [hid]));
     }
 
-    #[idle(shared = [key_report], local = [key_states])]
+    #[idle(shared = [hid_keyboard], local = [key_states, key_report])]
     fn idle(c: idle::Context) -> ! {
-        let mut key_report = c.shared.key_report;
+        let mut hid_keyboard = c.shared.hid_keyboard;
         let key_states = c.local.key_states;
+        let key_report = c.local.key_report;
 
         loop {
             let timestamp = Mono::now();
             let pin_states = rp2040_hal::Sio::read_bank0();
 
             for (i, key_state) in key_states.into_iter().enumerate() {
-                let pressed = (pin_states & key_state.read_mask) == 0;
+                // Don't update if debounce period hasn't passed yet
+                if timestamp < key_state.next_update {
+                    continue;
+                }
 
-                if pressed && timestamp - key_state.last_update >= DEBOUNCE_UP {
-                    key_report.lock(|kr| kr.keycodes[i] = key_state.keycode as u8);
-                    key_state.last_update = timestamp;
-                } else if !pressed && timestamp - key_state.last_update >= DEBOUNCE_DOWN {
-                    key_report.lock(|kr| kr.keycodes[i] = 0x00);
-                    key_state.last_update = timestamp;
+                // Determine there's a transition in key state
+                let old_pressed = key_report.keycodes[i] > 0;
+                let new_pressed = (pin_states & key_state.read_mask) == 0;
+
+                match (old_pressed, new_pressed) {
+                    (false, true) => {
+                        // Released -> Pressed
+                        key_report.keycodes[i] = key_state.keycode as u8;
+                        key_state.next_update = timestamp + DEBOUNCE_DOWN;
+                    }
+                    (true, false) => {
+                        // Pressed -> Released
+                        key_report.keycodes[i] = 0;
+                        key_state.next_update = timestamp + DEBOUNCE_UP;
+                    }
+                    _ => {}
                 }
             }
+
+            hid_keyboard.lock(|hid| {
+                let _ = hid.push_input(key_report);
+            });
         }
     }
 }
