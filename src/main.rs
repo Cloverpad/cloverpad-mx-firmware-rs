@@ -47,7 +47,6 @@ mod app {
         // USB IRQ
         usb_device: UsbDevice<'static, rp2040_hal::usb::UsbBus>,
         hid_keyboard: HIDClass<'static, rp2040_hal::usb::UsbBus>,
-        hid_discard_buf: [u8; 64],
 
         // "Idle" Loop
         key_states: [KeyState; 3],
@@ -99,7 +98,7 @@ mod app {
         let usb_bus_allocator = c.local.usb_bus.as_ref().unwrap();
 
         // Setup the HID class driver, providing keyboard reports
-        let hid_keyboard = HIDClass::new(usb_bus_allocator, KeyboardReport::desc(), 1);
+        let hid_keyboard = HIDClass::new_ep_in(usb_bus_allocator, KeyboardReport::desc(), 1);
 
         // Setup the USB device description
         let usb_device = UsbDeviceBuilder::new(usb_bus_allocator, UsbVidPid(0x1404, 0x1404))
@@ -153,7 +152,6 @@ mod app {
                 // USB IRQ
                 usb_device,
                 hid_keyboard,
-                hid_discard_buf: [0; 64],
 
                 // "Idle" Loop
                 key_states,
@@ -161,23 +159,18 @@ mod app {
         )
     }
 
-    #[task(binds = USBCTRL_IRQ, shared = [key_report], local = [usb_device, hid_keyboard, hid_discard_buf])]
+    #[task(binds = USBCTRL_IRQ, shared = [key_report], local = [usb_device, hid_keyboard])]
     fn poll_usb(mut c: poll_usb::Context) {
         let poll_usb::LocalResources {
             usb_device,
             hid_keyboard,
-            hid_discard_buf,
             ..
         } = c.local;
 
-        c.shared.key_report.lock(|kr| {
-            let _ = hid_keyboard.push_input(kr);
-        });
-
         if usb_device.poll(&mut [hid_keyboard]) {
-            // The OS may send a report to the keypad, e.g. setting NumLock LED
-            // We don't need to process this, so read + discard it
-            let _ = hid_keyboard.pull_raw_output(hid_discard_buf);
+            c.shared.key_report.lock(|kr| {
+                let _ = hid_keyboard.push_input(kr);
+            });
         }
     }
 
